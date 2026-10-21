@@ -1,18 +1,21 @@
-"""FastAPI service with tuning presets and note parsing."""
+"""FastAPI service with tuning presets and fretboard calculation."""
 import re
 from fastapi import FastAPI, HTTPException
 
 app = FastAPI(title="Guitar Fretboard Scale Visualizer", version="0.1.0")
 NOTE_BASE_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
-TUNING_PRESETS = {
-    "standard": "E2,A2,D3,G3,B3,E4", "drop_d": "D2,A2,D3,G3,B3,E4",
-    "drop_c": "C2,G2,C3,F3,A3,D4", "dadgad": "D2,A2,D3,G3,A3,D4",
-    "open_g": "D2,G2,D3,G3,B3,D4", "open_d": "D2,A2,D3,F#3,A3,D4",
-    "half_step_down": "D#2,G#2,C#3,F#3,A#3,D#4", "bass_4": "E1,A1,D2,G2",
-    "bass_5": "B0,E1,A1,D2,G2", "ukulele": "G4,C4,E4,A4",
-}
-NOTE_RE = re.compile(r"^([A-Ga-g])([#b]?)(-?\d+)$")
 SHARPS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+FLATS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+MODES = {"major": [0, 2, 4, 5, 7, 9, 11], "minor": [0, 2, 3, 5, 7, 8, 10],
+         "pentatonic_major": [0, 2, 4, 7, 9], "pentatonic_minor": [0, 3, 5, 7, 10],
+         "blues": [0, 3, 5, 6, 7, 10], "dorian": [0, 2, 3, 5, 7, 9, 10],
+         "mixolydian": [0, 2, 4, 5, 7, 9, 10]}
+TUNING_PRESETS = {"standard": "E2,A2,D3,G3,B3,E4", "drop_d": "D2,A2,D3,G3,B3,E4",
+    "drop_c": "C2,G2,C3,F3,A3,D4", "dadgad": "D2,A2,D3,G3,A3,D4", "open_g": "D2,G2,D3,G3,B3,D4",
+    "open_d": "D2,A2,D3,F#3,A3,D4", "half_step_down": "D#2,G#2,C#3,F#3,A#3,D#4",
+    "bass_4": "E1,A1,D2,G2", "bass_5": "B0,E1,A1,D2,G2", "ukulele": "G4,C4,E4,A4"}
+NOTE_RE = re.compile(r"^([A-Ga-g])([#b]?)(-?\d+)$")
+ROOT_RE = re.compile(r"^([A-Ga-g])([#b]?)$")
 
 
 def parse_tuning_note(value):
@@ -38,6 +41,45 @@ def parse_tuning(value):
     return notes
 
 
+def parse_root(value):
+    match = ROOT_RE.fullmatch(value.strip())
+    if not match:
+        raise ValueError(f"Invalid root note '{value}'.")
+    letter, accidental = match.groups()
+    return (NOTE_BASE_PC[letter.upper()] + (1 if accidental == "#" else -1 if accidental == "b" else 0)) % 12
+
+
+def note_name(pc, notation):
+    if notation not in {"sharps", "flats"}:
+        raise ValueError("Notation must be 'sharps' or 'flats'.")
+    return (SHARPS if notation == "sharps" else FLATS)[pc % 12]
+
+
+def fretboard_data(tuning, root, mode, frets, notation):
+    notes = parse_tuning(tuning)
+    root_pc = parse_root(root)
+    if mode not in MODES:
+        raise ValueError(f"Unknown mode '{mode}'.")
+    try:
+        frets = int(frets)
+    except (ValueError, TypeError):
+        raise ValueError("frets must be an integer between 1 and 24.")
+    if not 1 <= frets <= 24:
+        raise ValueError("frets must be between 1 and 24.")
+    scale = sorted({(root_pc + interval) % 12 for interval in MODES[mode]})
+    grid = []
+    for opened in notes:
+        row = []
+        for fret in range(frets + 1):
+            pc = (opened["pitch_class"] + fret) % 12
+            row.append({"fret": fret, "note": note_name(pc, notation), "pitch_class": pc,
+                        "is_root": pc == root_pc, "in_scale": pc in scale})
+        grid.append(row)
+    return {"tuning": [note["display"] for note in notes], "root": note_name(root_pc, notation),
+            "mode": mode, "frets": frets, "notation": notation, "scale_pitch_classes": scale,
+            "root_pitch_class": root_pc, "grid": grid}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -55,3 +97,12 @@ async def tunings():
         notes = [parse_tuning_note(item)["display"] for item in value.split(",")]
         presets[key] = {"notes": notes, "strings": len(notes)}
     return {"default": "standard", "presets": presets}
+
+
+@app.get("/fretboard")
+async def fretboard(tuning: str = "E2,A2,D3,G3,B3,E4", root: str = "C", mode: str = "major",
+                    frets: str = "12", notation: str = "sharps"):
+    try:
+        return fretboard_data(tuning, root, mode, frets, notation)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
