@@ -1,6 +1,8 @@
 """FastAPI service with tuning presets and fretboard calculation."""
 import re
+import html
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 
 app = FastAPI(title="Guitar Fretboard Scale Visualizer", version="0.1.0")
 NOTE_BASE_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
@@ -123,3 +125,40 @@ async def note_position(tuning: str = "E2,A2,D3,G3,B3,E4", string: str = "0", fr
                 "pitch_class": pc, "open_note": notes[string_index]["display"]}
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def render_svg(data):
+    string_count = len(data["grid"])
+    margin_x, top, cell, spacing = 18, 29, 34, 22
+    right = margin_x + cell * (data["frets"] + 1)
+    width = right + margin_x
+    height = top + spacing * (string_count - 1) + 20
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">',
+             f'<rect width="{width}" height="{height}" fill="white"/>']
+    for fret in range(data["frets"] + 1):
+        x = margin_x + cell * (fret + 0.5)
+        parts.append(f'<text x="{x}" y="16" font-family="monospace" font-size="9" text-anchor="middle">{fret}</text>')
+        line_x = margin_x + cell * (fret + 1)
+        parts.append(f'<line x1="{line_x}" y1="26" x2="{line_x}" y2="{height-17}" stroke="black" stroke-width="{3 if fret == 0 else 1}"/>')
+    for index, row in enumerate(data["grid"]):
+        y = top + (string_count - 1 - index) * spacing
+        parts.append(f'<line x1="{margin_x}" y1="{y}" x2="{right}" y2="{y}" stroke="black" stroke-width="{max(0.8,2.5-index*0.25)}"/>')
+        for note in row:
+            x = margin_x + cell * (note["fret"] + 0.5)
+            fill = "black" if note["is_root"] else "#d0d0d0" if note["in_scale"] else "white"
+            parts.append(f'<circle cx="{x}" cy="{y}" r="8" fill="{fill}" stroke="black"/>')
+            if note["in_scale"]:
+                color = "white" if note["is_root"] else "black"
+                parts.append(f'<text x="{x}" y="{y+3}" font-family="monospace" font-size="9" text-anchor="middle" fill="{color}">{html.escape(note["note"])}</text>')
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+@app.get("/fretboard.svg")
+async def fretboard_svg(tuning: str = "E2,A2,D3,G3,B3,E4", root: str = "C", mode: str = "major",
+                       frets: str = "12", notation: str = "sharps"):
+    try:
+        data = fretboard_data(tuning, root, mode, frets, notation)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=render_svg(data), media_type="image/svg+xml; charset=utf-8")
