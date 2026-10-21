@@ -106,3 +106,20 @@ async def fretboard(tuning: str = "E2,A2,D3,G3,B3,E4", root: str = "C", mode: st
         return fretboard_data(tuning, root, mode, frets, notation)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/note")
+async def note_position(tuning: str = "E2,A2,D3,G3,B3,E4", string: str = "0", fret: str = "0", notation: str = "sharps"):
+    try:
+        notes = parse_tuning(tuning)
+        string_index = int(string)
+        fret_index = int(fret)
+        if not 0 <= string_index < len(notes):
+            raise ValueError("string is outside the tuning range.")
+        if not 0 <= fret_index <= 24:
+            raise ValueError("fret must be between 0 and 24.")
+        pc = (notes[string_index]["pitch_class"] + fret_index) % 12
+        return {"string": string_index, "fret": fret_index, "note": note_name(pc, notation),
+                "pitch_class": pc, "open_note": notes[string_index]["display"]}
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
